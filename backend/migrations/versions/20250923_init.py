@@ -8,6 +8,7 @@ Create Date: 2025-09-23 00:00:00
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from pgvector.sqlalchemy import Vector
 
 revision = '20250923_init'
 down_revision = None
@@ -17,7 +18,7 @@ depends_on = None
 def upgrade():
     # Enable extensions
     op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
-    op.execute('CREATE EXTENSION IF NOT EXISTS "pgvector"')
+    op.execute('CREATE EXTENSION IF NOT EXISTS "vector"')
     op.execute('CREATE EXTENSION IF NOT EXISTS "pg_trgm"')
 
     # Create users table
@@ -35,12 +36,10 @@ def upgrade():
         sa.Column('user_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id'), nullable=False),
         sa.Column('name', sa.String, nullable=False),
         sa.Column('notes', sa.String, nullable=True),
-        sa.Column('embedding', postgresql.VECTOR, nullable=True),
+        sa.Column('embedding', Vector(1536), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
     )
-    # Create HNSW index for vector similarity
-    op.execute('CREATE INDEX idx_records_embedding ON records USING hnsw (embedding vector_cosine_ops)')
 
     # Create tags table
     op.create_table(
@@ -50,8 +49,6 @@ def upgrade():
         sa.Column('name', sa.String, nullable=False),
         sa.UniqueConstraint('user_id', 'name'),
     )
-    # Create GIN index with pg_trgm for prefix search
-    op.execute('CREATE INDEX idx_tags_name ON tags USING gin (name gin_trgm_ops)')
 
     # Create record_tags table
     op.create_table(
