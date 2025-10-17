@@ -18,3 +18,27 @@ venv/
 
 # OS cruft
 .DS_Store
+
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun.lockb
+
+# build output
+dist/
+build/
+.out/
+.vite/
+
+# Vite cache
+.vite/
+vite.config.timestamp-*.mjs
