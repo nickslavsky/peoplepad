@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-import { API_ORIGIN } from '@/lib/api'
-import { setAuthTokenSetter } from '@/lib/api' // Import to link setter
+import { API_ORIGIN, setAuthTokenSetter, refreshAccessToken } from '@/lib/api'
 
 interface AuthContextType {
   isAuthenticated: boolean
@@ -16,24 +15,21 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
 
   // Link the setter to api.ts for refresh callbacks
   useEffect(() => {
-    setAuthTokenSetter(setToken);
-    return () => setAuthTokenSetter(() => {}); // Cleanup
-  }, []);
+    setAuthTokenSetter(setToken)
+    return () => setAuthTokenSetter(() => {})
+  }, [])
 
   const login = async () => {
     try {
-      // Fetch the Google OAuth URL from your backend
       const response = await fetch('/api/auth/login')
       const data = await response.json()
       
-      // Open the Google OAuth URL in a popup
       const popup = window.open(
-        data.url, 
+        data.url,
         'google-oauth',
         'width=500,height=600,left=100,top=100'
       )
       
-      // Optional: Check if popup was blocked
       if (!popup) {
         alert('Please allow popups for this site to sign in with Google')
       }
@@ -43,36 +39,50 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const logout = async () => {
-    try {
-      const token = localStorage.getItem('access_token')
-      if (token) {
+    // Get tokens before clearing them
+    const accessToken = localStorage.getItem('access_token')
+    const refreshToken = localStorage.getItem('refresh_token')
+    
+    // Clear tokens immediately to prevent further API calls
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    setToken(null)
+
+    // Try to notify backend, but don't block on failure
+    if (accessToken) {
+      try {
+        // Use a timeout to prevent hanging
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 3000)
+        
         await fetch('/api/auth/logout', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`
-          }
+            'Authorization': `Bearer ${accessToken}`
+          },
+          signal: controller.signal
         })
+        
+        clearTimeout(timeoutId)
+      } catch (error) {
+        // Ignore logout errors - tokens already cleared
+        console.debug('Logout API call failed (non-critical):', error)
       }
-    } catch (error) {
-      console.error('Logout failed:', error)
-    } finally {
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('refresh_token')
-      setToken(null)
     }
   }
 
+  // Handle OAuth callback messages
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      // Security: Verify the message is from your backend's domain
       if (event.origin !== API_ORIGIN) {
         console.warn('Received message from unauthorized origin:', event.origin)
         return
       }
-      const { access_token, refresh_token } = event.data;
+
+      const { access_token, refresh_token } = event.data
       if (access_token && refresh_token) {
-          localStorage.setItem('access_token', access_token);
-          localStorage.setItem('refresh_token', refresh_token);
+        localStorage.setItem('access_token', access_token)
+        localStorage.setItem('refresh_token', refresh_token)
         setToken(access_token)
       }
     }
@@ -81,16 +91,40 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('message', handleMessage)
   }, [])
 
-  // Optional proactive expiry check (runs every minute; fallback if no API calls)
+  // Proactive token refresh before expiry (better UX than waiting for 401)
   useEffect(() => {
-    const checkExpiry = () => {
-      if (token && isTokenExpired(token)) {
-        logout();
-      }
-    };
-    const interval = setInterval(checkExpiry, 60000);
-    return () => clearInterval(interval);
-  }, [token]);
+    if (!token) return
+
+    const scheduleRefresh = () => {
+      const payload = decodeJwtPayload(token)
+      if (!payload?.exp) return
+
+      const expiresAt = payload.exp * 1000
+      const now = Date.now()
+      const timeUntilExpiry = expiresAt - now
+
+      // Refresh 60 seconds before expiry (or immediately if already expired/close)
+      const refreshIn = Math.max(0, timeUntilExpiry - 60000)
+
+      const timeoutId = setTimeout(async () => {
+        try {
+          await refreshAccessToken()
+          // Token will be updated via setAuthTokenSetter callback
+        } catch (error) {
+          console.error('Proactive token refresh failed:', error)
+          // Logout on refresh failure
+          logout()
+        }
+      }, refreshIn)
+
+      return timeoutId
+    }
+
+    const timeoutId = scheduleRefresh()
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [token])
 
   return (
     <AuthContext.Provider value={{ isAuthenticated, login, logout }}>
@@ -105,13 +139,13 @@ export const useAuth = () => {
   return context
 }
 
-// Helper for expiry check (duplicated from api.ts to avoid cyclic import; or move to shared util)
-const isTokenExpired = (token: string | null): boolean => {
-  if (!token) return true;
+// Helper: Decode JWT payload
+const decodeJwtPayload = (token: string | null): any => {
+  if (!token) return null
   try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    return Date.now() >= payload.exp * 1000;
+    const payload = token.split('.')[1]
+    return JSON.parse(atob(payload))
   } catch {
-    return true;
+    return null
   }
-};
+}

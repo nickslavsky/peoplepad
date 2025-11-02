@@ -1,7 +1,8 @@
+# routers/search.py (refactored)
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
-from sqlalchemy import cast
+from sqlalchemy import exists
 from pgvector.sqlalchemy import Vector
 from app.database import get_db
 from app.models.record import Record
@@ -27,11 +28,10 @@ async def search_records(
     query = (
         db.query(
             Record,
-            Record.embedding.l2_distance(query_embedding).label("distance")
+            Record.all_mpnet_base_v2_embedding.cosine_distance(query_embedding).label("distance")
         )
-        .join(RecordTag, Record.id == RecordTag.record_id, isouter=True)
-        .join(Tag, RecordTag.tag_id == Tag.id, isouter=True)
         .filter(Record.user_id == str(user_id))
+        .filter(Record.all_mpnet_base_v2_embedding.cosine_distance(query_embedding) <= 0.5)
     )
 
     if request.start_date:
@@ -41,9 +41,17 @@ async def search_records(
         query = query.filter(Record.created_at <= request.end_date)
 
     if request.tags:
-        query = query.filter(Tag.name.ilike_any([f"{tag}%" for tag in request.tags]))
+        # Use exists instead of join to avoid duplicate rows
+        tag_exists = exists().where(
+            RecordTag.record_id == Record.id
+        ).where(
+            RecordTag.tag_id == Tag.id
+        ).where(
+            Tag.name.ilike_any([f"{tag}%" for tag in request.tags])
+        )
+        query = query.filter(tag_exists)
 
-    query = query.order_by("distance").limit(10)
+    query = query.order_by("distance").limit(3)
 
     result = query.all()
     records = [

@@ -4,190 +4,297 @@
 PeoplePad is a lightweight personal knowledge app for remembering people you meet.  
 The MVP is designed for private use (local deployment, a few users).
 
-### Core Flows
-- **Login** with Google OAuth  
-- **Add Record** → enter *Name, Notes, and Tags*   
-- **Search Records** → query with text + optional date range + tag filter  
-- **View Record** → view the full record from search 
-- **Edit Record** → overwrite Notes or Tags, update modified timestamp 
+### Setup and run
+- `docker compose up --build`
+- Run migrations `docker compose exec backend alembic upgrade head`
 
 ---
-
-## 🎯 Finalized MVP Scope
-
-### Users
+Generate working runnable code, no stubs, no omissions
 - Google OAuth login (any Google account can log in).  
-- Each user only sees their own records.  
-- No roles, no social/sharing features.  
+- Each user only sees their own records.   
 
-### Records 
-- name, notes, tags, dates: created and modified
-- edits overwrite records (no revision history)
+- Tech: TypeScript, Vite, React Router v6, react-query, react-hook-form, shadcn/ui, custom Tailwind theme
+- don't over-fragment routes. Lazy load entire “record” routes (add/edit/view) as one chunk.
+- this is MVP, do not use zod
+- set up for local dev first with vite `npm run dev`
+- keep routes flat (/dashboard, /add, /view/:id, /edit/:id). Don’t over-engineer nested layouts yet.
+- Make sure you refetch tags when new records are added/edited (react-query’s invalidateQueries(['tags']) solves this).
+- Extract a <RecordForm /> used in both Add + Edit → prevents duplication.
+- Extract <SearchPanel /> with its own state and form handling.
+- API Layer
+- Wrap all fetches in a small /lib/api.ts with typed methods (getRecords, addRecord, etc.), so your react-query hooks are thin.
+- remember that toaster is deprecated in shadcn, use sonner or whatever is applicable
+- all needed shadcn components are copied, don't generate their code
 
-### Search
-- **Hybrid**:  
-  - Vector similarity search (pgvector)  
-  - Date range filter (created/updated)  
-  - Tag filter (exact or prefix match)  
-- Results ranked by semantic similarity.  
+#### Login Flow
+When a user clicks login button
+- open google auth URL in another tab 
+When the login is done
+- backend processes the callback in the popup (done in backend)
+- sends the tokens back to the main window via postMessage (done in backend)
+- closes the popup (done in backend)
+- and the main app saves the tokens
 
-### Embeddings
-- Computed in backend using an external service. First text-embedding-3-small then local small model. 
-- Handled asynchronously with caching in front, retries + exponential backoff.  
-- DB write is **not blocked** if embedding call fails (retry later).
+#### Dashboard
+- renders the header
+- the search pane
+- do not do an empty string search
 ---
-## Tech & Deployment
-- **Frontend**: React + TypeScript  
-- **Backend**: Python, FastAPI, SQLAlchemy, Alembic
-- **Database**: Postgres 17 + pgvector  
-- **Infra**: docker-compose with frontend and backend, db is a separate connection string
-- **Access**: local machine only (ngrok if needed)  
-- **Tooling**: CI/CD + tests for both frontend and backend
----
-## Backend Directory structure
-- backend/
-  - Dockerfile
-  - requirements.txt
-  - alembic.ini
-  - migrations/
-    - env.py
-    - script.py.mako
-    - versions/
-      - 20250923_init.py
-  - .env.example
-  - app/
-    - __init__.py
-    - main.py
-    - config.py
-    - database.py
-    - models/
-      - __init__.py
-      - user.py
-      - record.py
-      - tag.py
-    - schemas/
-      - __init__.py
-      - auth.py
-      - record.py
-      - search.py
-    - routers/
-      - __init__.py
-      - auth.py
-      - records.py
-      - search.py
-      - tags.py
-    - services/
-      - __init__.py
-      - auth.py
-      - search.py
-      - embedding.py
-    - tasks/
-      - __init__.py
-      - embeddings.py
-    - utils/
-      - __init__.py
-      - security.py
-  - tests/
-    - __init__.py
-    - test_auth.py
-    - test_records.py
-    - test_search.py
-    - test_embedding.py
---- 
-## Data Model
-### Tables
-- **users**  
-  - id (UUID PK)  
-  - email (text, unique)  
-  - created_at (timestamp with time zone, default now)  
+### API
+#### Schemas
 
-- **records**  
-  - id (UUID PK)  
-  - user_id (FK → users)  
-  - name (text)  
-  - notes (text)  
-  - embedding (vector)  
-  - created_at (timestamp with time zone, default now)  
-  - updated_at (timestamp with time zone, auto updated)  
+```
+class RecordCreate(BaseModel):
+    name: str
+    notes: Optional[str] = None
+    tags: List[str] = []
 
-- **tags**  
-  - id (UUID PK)  
-  - user_id (FK → users)  
-  - name (text, unique per user)  
+class RecordUpdate(BaseModel):
+    name: str
+    notes: Optional[str] = None
+    tags: List[str] = []
 
-- **record_tags** (many-to-many)  
-  - record_id (FK → records)  
-  - tag_id (FK → tags)  
-  - composite PK (record_id, tag_id)  
+class RecordResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+    name: str
+    notes: Optional[str]
+    tags: List[str]
+    created_at: datetime
+    updated_at: datetime
 
-### Rules
-- Each user only sees their own records and tags.  
-- Timestamps auto-maintained.  
-- pgvector extension enabled for embeddings. 
-### Additional
-- Enable **prefix search on tags** (GIN index with pg_trgm).  
-- Enable vector similarity search (HNSW index on embeddings).  
-- All database changes should be saved as versioned Alembic migrations.   
----
-## API Endpoints
-### Requirements
-- Auth
-  - /auth/login (redirects to Google OAuth)  
-  - /auth/callback (handles OAuth, issues JWT/session)  
-  - middleware to enforce authenticated user context  
+class SearchRequest(BaseModel):
+    query: str
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    tags: List[str] = []
 
-- Records
-  - POST /records → create record (name, notes, tags)  
-    - Save immediately with created_at/updated_at.  
-    - Launch async background task to compute embedding and update DB later.  
-  - GET /records/{id} → fetch a single record  
-  - PUT /records/{id} → update name/notes/tags, overwrite notes, update modified date  
-  - DELETE /records/{id} → delete record  
+class SearchResponse(BaseModel):
+    id: UUID
+    name: str
+    notes: Optional[str]
+    tags: List[str]
+    created_at: datetime
+    updated_at: datetime
+    distance: float
+    
+class TagResponse(BaseModel):
+    id: UUID
+    name: str
+```
 
-- Search
-  - POST /search → input: query string + date range + tags  
-    - Backend computes query embedding  
-    - Executes vector similarity search with filters (date range, tags)  
-    - Returns ranked list of matching records  
+#### Examples
+```
+# Example Request (POST /records):
+# {
+#   "name": "John Doe",
+#   "notes": "Met at conference, works in AI",
+#   "tags": ["conference", "AI"]
+# }
+#
+# Example Response:
+# {
+#   "id": "123e4567-e89b-12d3-a456-426614174000",
+#   "user_id": "456e7890-e12b-34d5-a678-426614174000",
+#   "name": "John Doe",
+#   "notes": "Met at conference, works in AI",
+#   "tags": ["conference", "AI"],
+#   "created_at": "2025-09-25T14:17:00Z",
+#   "updated_at": "2025-09-25T14:17:00Z"
+# }
 
-### Notes
-- Embedding service call must be **non-blocking**: use background worker (Celery, RQ, or FastAPI’s BackgroundTasks).  
-- Retries with exponential backoff on embedding failure.  
-- Include example request/response payloads for each route.  
-- Keep API surface minimal but production-quality for MVP.  
+# Example Request (POST /search):
+# {
+#   "query": "AI conference",
+#   "start_date": "2025-01-01T00:00:00Z",
+#   "end_date": "2025-12-31T23:59:59Z",
+#   "tags": ["conference", "AI"]
+# }
+#
+# Example Response:
+# [
+#   {
+#     "id": "123e4567-e89b-12d3-a456-426614174000",
+#     "name": "John Doe",
+#     "notes": "Met at conference, works in AI",
+#     "created_at": "2025-09-25T14:17:00Z",
+#     "updated_at": "2025-09-25T14:17:00Z",
+#     "distance": 0.123
+#   }
+# ]
+```
 
 ---
-## Embedding Workflow
-Embeddings are generated via an external REST service.
+Wireframes
+1. Landing/Login
+```
++----------------------------------------+
+|                                        |
+|               PeoplePad                |
+|                                        |
+|        [ Sign in with Google ]         |
+|                                        |
++----------------------------------------+
+```
+2. Dashboard
+```
++------------------------------------------------------------+
+| PeoplePad                        + Add Record   [Avatar ▼] |
++------------------------------------------------------------+
 
-### Requirements
-- When a record is created or updated:  
-  - Store the record immediately in Postgres (without waiting for embedding).  
-  - Launch an async background job to compute embedding.  
-  - Job fetches latest text (name + notes + tags) and sends HTTP POST to external embedding API.  
+Search:
+[ Search text input..................... ] [ Tag filter ▼ ] 
+[ From date ] to [ To date ]  [ Search ]
 
-- Embedding service call:
-  - REST endpoint: POST /embed  
-  - Input: JSON { "text": "<combined content>" }  
-  - Output: JSON { "embedding": [float, float, ...] }  
-  - Model may have latency or transient errors.  
+--------------------------------------------------------------
+Results (ranked by similarity):
 
-- Reliability:
-  - Jobs should retry with exponential backoff on failures (network errors, 5xx, timeouts).  
-  - Max retries configurable.  
-  - Errors logged with record ID for debugging.  
-  - Job queue should not block FastAPI main threads.  
+1. John Doe     | Notes: Met at conference, works at Acme... 
+   Tags: [sales] [toronto]   Last Modified: Sep 20, 2025
 
-- DB Update:
-  - Once embedding is retrieved, update the `embedding` column in the records table.  
-  - Ensure idempotency (if multiple jobs race, latest one wins).  
-  - Embeddings stored as Postgres vector type.  
+2. Jane Smith   | Notes: Designer, UX background in fintech...
+   Tags: [design]             Last Modified: Sep 15, 2025
+--------------------------------------------------------------
+```
+3. Add record;
+```
++------------------------------------------------------------+
+| < Back                                                     |
++------------------------------------------------------------+
 
-### Implementation guidance:
-- Use FastAPI’s BackgroundTasks for very lean MVP OR integrate Celery/RQ for more robust job handling.  
-- Show example code for:  
-  1. Launching a background embedding job after record save.  
-  2. Worker function that calls external API, retries, and updates DB.  
-- Include async HTTP request (httpx or aiohttp).  
-- Demonstrate retry logic (exponential backoff).
+Add Record
+--------------------------------------------------------------
+Name: [....................]
+
+Notes:
+[ Multiline text area................................. ]
+
+Tags: [ Type here to add... ]  (suggest dropdown appears)
+      [ ux ] [ conference ]
+
+--------------------------------------------------------------
+[ Save ]   [ Cancel ]
+```
+4. View Record
+```
++------------------------------------------------------------+
+| < Back to Search                 [ Edit Record ]           |
++------------------------------------------------------------+
+
+John Doe
+--------------------------------------------------------------
+Notes:
+Met at conference, works at Acme on sales strategy...
+
+Tags:
+[ sales ] [ toronto ]
+
+Created: Sep 1, 2025    Modified: Sep 20, 2025
+```
+5. Edit record:
+```
++------------------------------------------------------------+
+| < Back                                                     |
++------------------------------------------------------------+
+
+Edit Record
+--------------------------------------------------------------
+Name: [ John Doe ]
+
+Notes:
+[ Met at conference, works at Acme on sales strategy... ]
+
+Tags: [ sales ] [ toronto ]
+
+--------------------------------------------------------------
+[ Save ]   [ Cancel ]
+```
+---
+## Minimal Style Guide
+
+    Typography:
+
+        Headings → Inter or Roboto (Sans-serif, clean, modern)
+
+        Body → Inter or Roboto
+
+    Colors (light theme MVP):
+
+        Background → #FFFFFF
+
+        Header / Primary → #2563EB (blue-600)
+
+        Buttons → Filled primary (#2563EB), text white
+
+        Secondary buttons → Gray border #D1D5DB
+
+        Tags → Rounded pills, light background (#EFF6FF for blue, #F3F4F6 neutral)
+
+        Text → #111827 (almost black), Subtext #6B7280 (gray)
+
+    Spacing: 16px base grid, clean whitespace.
+
+    Form controls: Rounded corners (4–6px).
+---
+## Rough folder structure - feel free to make changes
+peoplepad-frontend/
+├── public/
+│   └── favicon.ico                 # Logo/branding assets
+│
+├── src/
+│   ├── app/                        # App-wide providers, routing, layout
+│   │   ├── App.tsx                 # Root component, wraps Router + Providers
+│   │   ├── routes.tsx              # React Router v6 routes (lazy-loaded)
+│   │   ├── providers/              
+│   │   │   ├── AuthProvider.tsx    # Context for Google OAuth user
+│   │   │   ├── QueryProvider.tsx   # React Query + Devtools setup
+│   │   │   └── ToastProvider.tsx   # shadcn/ui toast wrapper
+│   │   └── layout/                 
+│   │       ├── Header.tsx          # Logo, Add button, Avatar menu
+│   │       └── MainLayout.tsx      # Shared page layout
+│   │
+│   ├── features/                   # Feature-based organization
+│   │   ├── auth/
+│   │   │   ├── LandingPage.tsx     # Sign in with Google
+│   │   │   └── useAuth.ts          # Hook to access auth context
+│   │   │
+│   │   ├── records/
+│   │   │   ├── DashboardPage.tsx   # Search panel + results
+│   │   │   ├── AddRecordPage.tsx   # Add record form
+│   │   │   ├── EditRecordPage.tsx  # Edit record form
+│   │   │   ├── ViewRecordPage.tsx  # Full record view
+│   │   │   ├── components/         
+│   │   │   │   ├── RecordForm.tsx  # Shared Add/Edit form
+│   │   │   │   ├── SearchPanel.tsx # Search inputs
+│   │   │   │   ├── RecordList.tsx  # Results list
+│   │   │   │   └── RecordItem.tsx  # Single record row
+│   │   │   └── hooks/
+│   │   │       ├── useRecords.ts   # react-query hooks (list, add, edit)
+│   │   │       └── useTags.ts      # react-query hook for tags
+│   │   │
+│   │   └── tags/
+│   │       ├── TagAutocomplete.tsx # Notion-style prefix search
+│   │       └── TagChip.tsx         # Tag pill (Badge wrapper)
+│   │
+│   ├── components/ui/              # shadcn/ui local copies
+│   │
+│   ├── lib/                        # API + schemas + utils
+│   │   ├── api.ts                  # Fetch wrappers (getRecords, addRecord…)
+│   │
+│   ├── hooks/                      # App-level reusable hooks
+│   │   └── useToast.ts             # or any other way to use Sonner from Shadcn
+│   │
+│   ├── tests/                      # Centralized test helpers
+│   │   └── setup.ts                # Vitest + RTL setup (mocks, providers)
+│   │
+│   ├── index.css                   # Tailwind base + custom colors
+│   ├── main.tsx                    # Vite entry point
+│   └── vite-env.d.ts               # TypeScript vite env typings
+│
+├── tailwind.config.js              # Tailwind config (with custom palette)
+├── tsconfig.json                   # TypeScript config
+├── vite.config.ts                  # Vite config
+├── package.json
+└── README.md
+
 

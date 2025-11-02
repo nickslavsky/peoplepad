@@ -8,7 +8,7 @@ services:
     depends_on:
       - db
     env_file:
-      - ./backend/.env   # not committed; use .env.example as template
+      - ./backend/.env
     ports:
       - "8000:8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -28,6 +28,17 @@ services:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-
+  embedding-service:
+    build:
+      context: ./embedding-service
+      dockerfile: Dockerfile
+    container_name: embedding-service
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./embedding-service:/app
+    env_file: ./embedding-service/.env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 volumes:
   pgdata:

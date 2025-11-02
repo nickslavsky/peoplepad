@@ -52,7 +52,7 @@ async def get_record(id: UUID, db: Session = Depends(get_db), user_id: UUID = De
         raise HTTPException(status_code=404, detail="Record not found")
     return record
 
-@router.put("/{id}", response_model=RecordResponse)
+@router.patch("/{id}", response_model=RecordResponse)
 async def update_record(
     id: UUID,
     record: RecordUpdate,

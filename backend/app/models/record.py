@@ -13,13 +13,13 @@ class Record(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
     notes = Column(String, nullable=True)
-    embedding = Column(Vector(1536), nullable=True)
+    all_mpnet_base_v2_embedding = Column(Vector(768), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        Index('idx_records_embedding', 'embedding', postgresql_using='hnsw',
-              postgresql_ops={'embedding': 'vector_l2_ops'}),
+        Index('idx_records_all_mpnet_base_v2_embedding', 'all_mpnet_base_v2_embedding', postgresql_using='hnsw',
+              postgresql_ops={'all_mpnet_base_v2_embedding': 'vector_cos_ops'}),
     )
     # Add relationship to fetch tags
     tags = relationship(

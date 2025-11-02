@@ -12,13 +12,6 @@ const decodeJwtPayload = (token: string | null): any => {
   }
 };
 
-// Helper: Check if token is expired (client-side, for proactive if needed)
-const isTokenExpired = (token: string | null): boolean => {
-  const payload = decodeJwtPayload(token);
-  if (!payload?.exp) return true;
-  return Date.now() >= payload.exp * 1000;
-};
-
 // Refresh function (shared)
 let isRefreshing = false;
 let refreshPromise: Promise<string | null> | null = null;
@@ -37,7 +30,7 @@ export const refreshAccessToken = async (): Promise<string | null> => {
   const response = await fetch(`${API_BASE}/auth/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: refreshToken }), // Adjust key if backend expects differently
+    body: JSON.stringify({ refresh_token: refreshToken }),
   });
 
   if (!response.ok) {
@@ -66,7 +59,7 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
     // Token likely expired; attempt refresh and retry
     if (!isRefreshing) {
       isRefreshing = true;
-      refreshPromise = refreshAccessToken() // Assign the promise here
+      refreshPromise = refreshAccessToken()
         .then((newToken) => {
           isRefreshing = false;
           return newToken;
@@ -78,14 +71,14 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
           if (authTokenSetter) authTokenSetter(null);
-          return null; // Resolve to null on error
+          return null;
         })
         .finally(() => {
-          refreshPromise = null; // Reset after completion (add this for cleanliness)
+          refreshPromise = null;
         });
     }
 
-    // Await the promise (TS now knows it could be null, but since we start it above, it's set)
+    // Await the shared refresh promise
     const newToken = refreshPromise ? await refreshPromise : null;
     if (!newToken) {
       const error = await response.json().catch(() => ({ message: 'Authentication failed' }));
